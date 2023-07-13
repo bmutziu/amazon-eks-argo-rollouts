@@ -25,17 +25,17 @@ data "aws_availability_zones" "available" {}
 locals {
   name         = basename(path.cwd)
   cluster_name = coalesce(var.cluster_name, local.name)
-  region       = "ap-southeast-1"
+  region       = "eu-west-2"
 
   vpc_cidr = "10.0.0.0/16"
   azs      = slice(data.aws_availability_zones.available.names, 0, 3)
 }
 
 module "eks_blueprints" {
-  source = "github.com/aws-ia/terraform-aws-eks-blueprints?ref=v4.6.2"
+  source = "github.com/aws-ia/terraform-aws-eks-blueprints?ref=v4.27.0"
 
   cluster_name    = local.cluster_name
-  cluster_version = "1.22"
+  cluster_version = "1.27"
 
   vpc_id             = module.vpc.vpc_id
   private_subnet_ids = module.vpc.private_subnets
@@ -44,14 +44,14 @@ module "eks_blueprints" {
     mg_5 = {
       node_group_name = "managed-ondemand"
       instance_types  = ["m5.large"]
-      min_size        = 2
+      min_size        = 3
       subnet_ids      = module.vpc.private_subnets
     }
   }
 }
 
 module "eks_blueprints_kubernetes_addons" {
-  source = "github.com/aws-ia/terraform-aws-eks-blueprints//modules/kubernetes-addons?ref=v4.16.0"
+  source = "github.com/aws-ia/terraform-aws-eks-blueprints//modules/kubernetes-addons?ref=v4.27.0"
 
   eks_cluster_id       = module.eks_blueprints.eks_cluster_id
   eks_cluster_endpoint = module.eks_blueprints.eks_cluster_endpoint
@@ -59,9 +59,44 @@ module "eks_blueprints_kubernetes_addons" {
   eks_cluster_version  = module.eks_blueprints.eks_cluster_version
 
   # EKS Managed Add-ons
-  enable_amazon_eks_vpc_cni    = true
-  enable_amazon_eks_coredns    = true
-  enable_amazon_eks_kube_proxy = true
+  enable_amazon_eks_vpc_cni = true # default is false
+  #Optional
+  amazon_eks_vpc_cni_config = {
+    addon_name = "vpc-cni"
+    # addon_version          = data.aws_eks_addon_version.latest["vpc-cni"].version
+    addon_version            = "v1.13.2-eksbuild.1"
+    service_account          = "aws-node"
+    resolve_conflicts        = "OVERWRITE"
+    namespace                = "kube-system"
+    service_account_role_arn = ""
+    preserve                 = true
+    additional_iam_policies  = []
+    tags                     = {}
+  }
+  enable_amazon_eks_coredns = true # default is false
+  #Optional
+  amazon_eks_coredns_config = {
+    addon_name               = "coredns"
+    addon_version            = "v1.10.1-eksbuild.2"
+    service_account          = "coredns"
+    resolve_conflicts        = "OVERWRITE"
+    namespace                = "kube-system"
+    service_account_role_arn = ""
+    additional_iam_policies  = []
+    tags                     = {}
+  }
+  enable_amazon_eks_kube_proxy = true # default is false
+  #Optional
+  amazon_eks_kube_proxy_config = {
+    addon_name               = "kube-proxy"
+    addon_version            = "v1.27.3-eksbuild.1"
+    service_account          = "kube-proxy"
+    resolve_conflicts        = "OVERWRITE"
+    namespace                = "kube-system"
+    additional_iam_policies  = []
+    service_account_role_arn = ""
+    tags                     = {}
+  }
 
   # Add-ons
   enable_aws_load_balancer_controller = false
@@ -78,12 +113,36 @@ module "eks_blueprints_kubernetes_addons" {
   enable_yunikorn                     = false
   enable_argo_rollouts                = true
   enable_grafana                      = true
-  enable_appmesh_controller           = true
+  grafana_irsa_policies               = [] # Optional to add additional policies to IRSA
+  # Optional grafana_helm_config
+  grafana_helm_config = {
+    name        = "grafana"
+    chart       = "grafana"
+    repository  = "https://grafana.github.io/helm-charts"
+    version     = "6.43.1"
+    namespace   = "grafana"
+    description = "Grafana Helm Chart deployment configuration"
+    values      = [templatefile("${path.module}/values.yaml", {})]
+  }
+  enable_appmesh_controller = true
+
+  enable_amazon_eks_aws_ebs_csi_driver = true # default is false
+  #Optional
+  amazon_eks_aws_ebs_csi_driver_config = {
+    addon_name               = "aws-ebs-csi-driver"
+    addon_version            = "v1.20.0-eksbuild.1"
+    service_account          = "ebs-csi-controller-sa"
+    resolve_conflicts        = "OVERWRITE"
+    namespace                = "kube-system"
+    additional_iam_policies  = []
+    service_account_role_arn = ""
+    tags                     = {}
+  }
 }
 
 module "irsa_app-envoy-proxies" {
 
-  source                      = "github.com/aws-ia/terraform-aws-eks-blueprints//modules/irsa?ref=v4.16.0"
+  source                      = "github.com/aws-ia/terraform-aws-eks-blueprints//modules/irsa?ref=v4.27.0"
   kubernetes_namespace        = "app"
   create_kubernetes_namespace = true
   kubernetes_service_account  = "app-envoy-proxies"
@@ -131,7 +190,7 @@ resource "aws_iam_policy" "appmesh_envoy" {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 3.0"
+  version = "~> 4.0"
 
   name = local.name
   cidr = local.vpc_cidr
